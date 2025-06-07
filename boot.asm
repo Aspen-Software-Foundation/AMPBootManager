@@ -4,9 +4,12 @@ KERNEL_LOCATION equ 0x7e00    ; Where kernel will be loaded (0x7c00 + 512)
 SECTOR_COUNT_MINIMUM equ 0x02         ; Number of sectors to read
 
 SECTOR_COUNT_ISO_PAD equ (SECTOR_COUNT_MINIMUM + 3) / 4
-SECTOR_COUNT_READOP equ SECTOR_COUNT_ISO_PAD*4
+SECTOR_COUNT_READOP equ (SECTOR_COUNT_ISO_PAD*4)-1
 
 SECTOR_COUNT_ISO_PAD_BYTES equ SECTOR_COUNT_ISO_PAD*2048
+
+
+
 
 start:
     cli
@@ -41,7 +44,7 @@ start:
 .cdrom:
     mov si, dev_cdrom
     call comncmn
-    jmp no_error
+    jmp continue_boot
 
 .other:
     mov si, dev_othr
@@ -85,13 +88,16 @@ print_hex_dl:
 returncall:
     ret
 
+
+
+; Make A function Elsewhere (AFTER the bootsig)
 readsectorsATTEMPT:
     mov ah, 0x41               ; Check if LBA is supported
     mov bx, 0x55AA             ; Magic number required by BIOS
     int 0x13                   ; BIOS disk function
 
     jc .use_CHS                 ; If carry flag is set, LBA is not supported
-    jmp .use_CHS                ; If LBA is supported, jump to LBA routine
+    jmp .use_LBA                ; If LBA is supported, jump to LBA routine
 
 .use_CHS:                       ; NOTE: I AM USING A LOCAL HERE BCUZ PERHAPS I SHOULD ADD LBA IN THE FUTURE?
     mov bx, KERNEL_LOCATION
@@ -103,9 +109,30 @@ readsectorsATTEMPT:
     mov cl, 0x02                ; Sector 2 (first sector is 1)
     mov dl, [BOOT_DRIVE]        ; Boot disk number
     int 0x13                    ; BIOS disk read
-    jnc no_error
+    jnc .no_error
 
     mov si, badcode_error_string_1
+    jmp .errcommon
+    
+.use_LBA:
+    mov si, dap     ; SI gets offset
+    mov bx, si      ; BX = offset of DAP (within DS)
+    
+.reset:
+    mov dl, [BOOT_DRIVE]
+	mov ah, 0	; reset disk
+	int 0x13
+	jc .reset	; reset again if error
+
+    mov ah, 0x42                 ; Extended read
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc .reset
+    jmp .no_error             ; jump to loaded kernel
+
+    mov si, badcode_error_string_1
+
+.errcommon:
     mov [ERRDATA], ah
 
     call print_si
@@ -113,67 +140,19 @@ readsectorsATTEMPT:
     call print_hex_dl
     jmp halt_b16rm
 
-no_error:
+
+.no_error:
+    ; Would return in a function but no func so just continue boot
+continue_boot:
     mov si, msg_bootneardone
     call print_si
 
-mov ah, 0x00               ; BIOS set video mode function
-mov al, 0x03               ; Mode 3 = 80x25 text mode
-int 0x10                   ; BIOS video interrupt
-
-CODE_SEG equ GDT_code - GDT_start
-DATA_SEG equ GDT_data - GDT_start
-
-cli                        ; Disable interrupts before GDT load
-lgdt [GDT_descriptor]      ; Load Global Descriptor Table
-
-mov eax, cr0               ; Read CR0 control register
-or eax, 1                  ; Set PE bit (bit 0) to enable protected mode
-mov cr0, eax               ; Write back to CR0
-
-jmp CODE_SEG:start_protected_mode ; Far jump to reload CS and enter protected mode
+jmp KERNEL_LOCATION
 
 halt_b16rm:
     cli
     hlt
     jmp halt_b16rm
-
-; GDT definition for protected mode
-GDT_start:
-    GDT_null:
-        dd 0x0
-        dd 0x0
-
-    GDT_code:
-        dw 0xffff            ; Segment limit (max 64KB)
-        dw 0x0               ; Base low
-        db 0x0               ; Base middle
-        db 0b10011010        ; Access byte (code segment, executable, readable, accessed)
-        db 0b11001111        ; Flags (granularity, 32-bit)
-        db 0x0               ; Base high
-
-    GDT_data:
-        dw 0xffff
-        dw 0x0
-        db 0x0
-        db 0b10010010        ; Access byte (data segment, writable)
-        db 0b11001111        ; Flags
-        db 0x0
-
-GDT_end:
-
-GDT_descriptor:
-    dw GDT_end - GDT_start - 1  ; Size of GDT - 1
-    dd GDT_start                ; Address of GDT
-
-[bits 32]
-start_protected_mode:
-    jmp KERNEL_LOCATION       ; Jump to kernel loaded at 0x7e00 (assumed to be 32-bit code)
-
-HALT_PM_B32:
-    cli
-    hlt
-    jmp HALT_PM_B32
 
 BOOT_DRIVE db 0
 ERRDATA db 0
@@ -190,51 +169,228 @@ badcode_error_string_1 db 13, 10, 'ERR: 0x0BCE', 0
 badcode_error_string_2 db 13, 10, 'ERR: 0x1BCE', 0
 msg_bootneardone db 13, 10, 'NBT', 0
 
-;align 16
-;lba_packet:
-;    db 16
-;    db 0
-;    dw SECTOR_COUNT_READOP
-;    dd KERNEL_LOCATION
-;    dw 0          ; segment
-;    dw 0          ; reserved
-;    dq 1          ; start LBA
+align 16
+dap:
+    db 16                   ; size of DAP (16 bytes)
+    db 0                    ; reserved (1 byte)
+    dw SECTOR_COUNT_READOP  ; Operation size (like in NASM when u move data without saying word or byte, but in sectors and for reading disks)
+    dw KERNEL_LOCATION      ; offset (BX)
+    dw 0x0000               ; segment (ES)
+    dd 1                    ; Lower 32 bits of starting sector
+    dd 0                    ; Upper 32 bits of starting sector (almost always 0)
 
 
 
 times 446 - ($ - $$) db 0
-
+; MBR PARTITION TABLE HERE!!!!!!!!!!111!!!!
 times 510 - ($ - $$) db 0
 dw 0xAA55
 
-mov ax, DATA_SEG          ; Load data segment selector
-mov ds, ax
-mov ss, ax
-mov es, ax
-mov fs, ax
-mov gs, ax
-
-mov ebp, 0x90000		  ; Set 32-bit stack base pointer
-mov esp, ebp
 jmp bootdone
 
+tempdata:
+    .reg_eax dd 0
+    .reg_ebx dd 0
+    .reg_ecx dd 0
+    .reg_edx dd 0
 
-msg_bootdone db 'WELCOME TO ASPEN MULTI-PLATFORM OPERATING SYSTEM (AMPOS) BOOT MANAGER (AMPBootMgr)', 0
+    
+read_drive_registers:
+    .reg_eax dd 0
+    .reg_ebx dd 0
+    .reg_ecx dd 0
+    .reg_edx dd 0
+
+SECTORS_PER_TRACK:
+    dw 0x12 ; idk maybe there would be more than 255 or some shi
+lba2chs:
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push dx
+    sub sp, 2 * 3        ; -2 = HEAD
+                ; -4 = TRACK
+                ; -6 = SECTOR
+ 
+    mov si, [bp + 4] ; Linear Block Address
+
+    ; compute HEAD
+    mov cx, SECTORS_PER_TRACK
+    shl cx, 1            ; SPT * 2
+    xor dx, dx            ; initialize quotient
+    mov ax, si            ; LBA % 
+    mov bx, cx            ; (SPT * 2)
+    div bx
+
+    mov ax, dx            ; use quotient as next dividend
+    xor dx, dx
+    mov bx, SECTORS_PER_TRACK    ; / SPT
+    div bx
+    mov [bp - 2], ax        ; store HEAD (remainder)
+
+    ; compute TRACK
+    xor dx, dx               ; initialize quotient
+    mov ax, si            ; LBA %
+    mov bx, cx            ; (SPT * 2)
+    div bx
+    mov [bp - 4], ax        ; store TRACK (remainder)
+
+    ; compute SECTOR
+    xor dx, dx
+    mov ax, si
+    mov bx, SECTORS_PER_TRACK
+    div bx
+    add dx, 1
+    mov [bp - 6], dx        ; store SECTOR (quotient)
+
+    pop dx
+    pop bx
+    pop ax
+
+    ; assemble return values
+    mov dh, byte [bp - 2]        ; load HEAD
+    mov ch, byte [bp - 4]        ; load TRACK
+    mov cl, byte [bp - 6]        ; load SECTOR
+    mov sp, bp
+    pop bp
+    ret
+
+; PLACE DISK READ FUNCTION HERE
+DiskRead16bRM:
+    pusha
+    mov ah, 0x41               ; Check if LBA is supported
+    mov bx, 0x55AA             ; Magic number required by BIOS
+    int 0x13                   ; BIOS disk function
+
+    jc .use_CHS                 ; If carry flag is set, LBA is not supported
+    jmp .use_LBA                ; If LBA is supported, jump to LBA routine
+
+.use_CHS:                       ; NOTE: I AM USING A LOCAL HERE BCUZ PERHAPS I SHOULD ADD LBA IN THE FUTURE?
+    mov bx, KERNEL_LOCATION
+
+    mov ah, 0x02                ; BIOS CHS disk read function
+    mov al, SECTOR_COUNT_READOP ; Number of sectors to read
+    mov ch, 0x00                ; Cylinder 0
+    mov dh, 0x00                ; Head 0
+    mov cl, 0x02                ; Sector 2 (first sector is 1)
+    mov dl, [BOOT_DRIVE]        ; Boot disk number
+    int 0x13                    ; BIOS disk read
+    jnc .done
+
+    mov si, badcode_error_string_1
+    jmp .errcommon
+    
+.use_LBA:
+    mov si, dap     ; SI gets offset
+    mov bx, si      ; BX = offset of DAP (within DS)
+    
+.reset:
+    mov dl, [BOOT_DRIVE]
+	mov ah, 0	; reset disk
+	int 0x13
+	jc .reset	; reset again if error
+
+    mov ah, 0x42                 ; Extended read
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc .reset
+    jmp .done             ; jump to loaded kernel
+.errcommon:
+    mov [ERRDATA], ah
+
+    call print_si
+    mov dl, [ERRDATA]
+    call print_hex_dl
+    stc
+
+.done:
+    ret
+
+align 16
+.dap:
+    db 16                   ; size of DAP (16 bytes)
+    db 0                    ; reserved (1 byte)
+    dw SECTOR_COUNT_READOP  ; Operation size (like in NASM when u move data without saying word or byte, but in sectors and for reading disks)
+    dw KERNEL_LOCATION      ; offset (BX)
+    dw 0x0000               ; segment (ES)
+    dd 1                    ; Lower 32 bits of starting sector
+    dd 0                    ; Upper 32 bits of starting sector (almost always 0)
+
+
+msg_bootdone db 'WELCOME TO ASPEN MULTI-PLATFORM OPERATING SYSTEM (', 0
+db 'AMPOS', 0
+db ') BOOT MANAGER (', 0
+db 'AMPBootMgr', 0
+db ')', 0
+
+HALT_PM_B32:
+    cli
+    hlt
+    jmp HALT_PM_B32
 
 bootdone:
+    mov ah, 0x00               ; BIOS set video mode function
+    mov al, 0x03               ; Mode 3 = 80x25 text mode
+    int 0x10                   ; BIOS video interrupt
+
     mov ebx, 0xB8000
     mov ecx, 0
 
-.loop:
+.loop0:
     mov al, [msg_bootdone + ecx]
     mov [ebx], al
     mov byte [ebx + 1], 0x0C
     add ebx, 2
     inc ecx
     cmp byte [msg_bootdone + ecx], 0
-    jne .loop
+    jne .loop0
+    
+    inc ecx
+.loop1:
+    mov al, [msg_bootdone + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0D
+    add ebx, 2
+    inc ecx
+    cmp byte [msg_bootdone + ecx], 0
+    jne .loop1
+    
+    inc ecx
+.loop2:
+    mov al, [msg_bootdone + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0C
+    add ebx, 2
+    inc ecx
+    cmp byte [msg_bootdone + ecx], 0
+    jne .loop2
+    
+    inc ecx
+.loop3:
+    mov al, [msg_bootdone + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0D
+    add ebx, 2
+    inc ecx
+    cmp byte [msg_bootdone + ecx], 0
+    jne .loop3
+    
+    inc ecx
+.loop4:
+    mov al, [msg_bootdone + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0C
+    add ebx, 2
+    inc ecx
+    cmp byte [msg_bootdone + ecx], 0
+    jne .loop4
 
 .done:
     jmp HALT_PM_B32
 
+
 times SECTOR_COUNT_ISO_PAD_BYTES - ($ - $$) db 0
+
+
+; 69 20 6D 65 61 6E 74 20 69 20 77 61 73 20 67 6F 69 6E 67 20 74 6F 20 64 6F 20 73 6F 6D 65 74 68 69 6E 67 2C 20 61 73 20 69 6E 20 61 20 73 75 72 70 72 69 73 65
