@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-mkdir ./bin
+mkdir -p ./bin
 
 nasm -f bin -o bin/boot.ase boot.asm
 cp bin/boot.ase bin/bootloader.ase
