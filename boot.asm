@@ -369,7 +369,7 @@ bootdone:
 
 .s512:
     mov word  [rdap0+0x02], 4
-    mov dword [rdap0+0x08], 67
+    mov dword [rdap0+0x08], 64
     mov [rdap0+0x10], dl
     
 .readop:
