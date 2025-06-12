@@ -1,10 +1,12 @@
 [org 0x7C00]
 [bits 16]
-KERNEL_LOCATION equ 0x7e00    ; Where kernel will be loaded (0x7c00 + 512)
-SECTOR_COUNT_MINIMUM equ 0x02         ; Number of sectors to read
+KERNEL_LOCATION equ 0x7C00    ; Due to some bugs i present to you...... Reloading the loaded sectors
+KERNEL_JUMPADDR equ 0xC400    ; Where kernel will be loaded (0x7c00 + 512*36)
+
+SECTOR_COUNT_MINIMUM equ 0x40         ; Number of sectors to read
 
 SECTOR_COUNT_ISO_PAD equ (SECTOR_COUNT_MINIMUM + 3) / 4
-SECTOR_COUNT_READOP equ (SECTOR_COUNT_ISO_PAD*4)-1
+SECTOR_COUNT_READOP equ (SECTOR_COUNT_ISO_PAD*4)
 
 SECTOR_COUNT_ISO_PAD_BYTES equ SECTOR_COUNT_ISO_PAD*2048
 
@@ -39,12 +41,22 @@ start:
     mov si, dev_hdd
 .bldd_common:
     call comncmn
+    mov dl, [BOOT_DRIVE]
+    mov [0x7000], dl
     jmp readsectorsATTEMPT
 
 .cdrom:
     mov si, dev_cdrom
     call comncmn
-    jmp continue_boot
+
+    mov ax, [dap + 2]
+    shr ax, 2
+    mov [dap + 2], ax
+    
+    mov dl, [BOOT_DRIVE]
+    mov [0x7000], dl
+
+    jmp readsectorsATTEMPT
 
 .other:
     mov si, dev_othr
@@ -105,7 +117,7 @@ readsectorsATTEMPT:
     mov al, SECTOR_COUNT_READOP ; Number of sectors to read
     mov ch, 0x00                ; Cylinder 0
     mov dh, 0x00                ; Head 0
-    mov cl, 0x02                ; Sector 2 (first sector is 1)
+    mov cl, 0x01                ; Sector 5 (first sector is 1)
     mov dl, [BOOT_DRIVE]        ; Boot disk number
     int 0x13                    ; BIOS disk read
     jnc .no_error
@@ -154,10 +166,12 @@ readsectorsATTEMPT:
 .no_error:
     ; Would return in a function but no func so just continue boot
 continue_boot:
+    mov dl, [0x7000]
+    mov [BOOT_DRIVE], dl
     mov si, msg_bootneardone
     call print_si
 
-jmp KERNEL_LOCATION
+jmp KERNEL_JUMPADDR
 
 halt_b16rm:
     cli
@@ -175,7 +189,7 @@ dev_hdd   db 'HDD',0
 dev_cdrom db 'CDROM',0
 dev_othr  db 'Other Device',0
 
-badcode_error_string_1 db 13, 10, 'ERR: 0x0BCE... ', 0
+badcode_error_string_1 db 13, 10, 'ERR: 0x0BCE', 0
 badcode_error_string_2 db 13, 10, 'ERR: 0x1BCE', 0
 badcode_error_string_3 db 13, 10, 'ERR: 0x1CBD', 0
 msg_bootneardone db 13, 10, 'NBT', 0
@@ -187,17 +201,20 @@ dap:
     dw SECTOR_COUNT_READOP  ; Operation size (like in NASM when u move data without saying word or byte, but in sectors and for reading disks)
     dw KERNEL_LOCATION      ; offset (BX)
     dw 0x0000               ; segment (ES)
-    dd 1                    ; Lower 32 bits of starting sector
+    dd 0                    ; Lower 32 bits of starting sector
     dd 0                    ; Upper 16 bits of starting sector (almost always 0)
-
 
 
 times 446 - ($ - $$) db 0
 ; MBR PARTITION TABLE HERE!!!!!!!!!!111!!!!
 times 510 - ($ - $$) db 0
 dw 0xAA55
+
 ; NOTE FOR FUTURE
 ; PLACE GUID PT HERE
+; PS: USE A PARTITIONING TOOL IN MAKEBASH.SH FOR THIS
+
+times (512*36) - ($ - $$) db 0
 
 jmp bootdone
 
@@ -206,11 +223,98 @@ rdap0:
     db 16                   ; size of DAP (16 bytes) EXCLUDING drive id
     db 0                    ; reserved (1 byte)
     dw SECTOR_COUNT_READOP  ; Operation size (like the NASM err when u move data between two addressses without saying word or byte, but in sectors and for reading disks)
-    dw 0xA000               ; offset (BX)
+    dw 0x8000               ; offset (BX)
     dw 0x0000               ; segment (ES)
     dd 16                   ; Lower 32 bits of starting sector
     dd 0                    ; Upper 32 bits of starting sector (almost always 0)
-    dd 0                    ; DRIVE NUMBER
+    db 0                    ; DRIVE NUMBER
+
+
+
+
+dd 0 ; saefti
+
+print_hex_dl2: 
+    push eax
+
+    mov al, dl 
+    shr al, 4 
+    call .nib 
+    mov al, dl 
+    and al, 0x0F 
+    call .nib 
+     
+    pop eax
+    ret 
+.nib: 
+    add al, '0' 
+    cmp al, '9' 
+    jbe .store 
+    add al, 7 ; Convert A-F 
+.store: 
+    mov [ebx], al ; Write character at EBX 
+    mov byte [ebx+1], 0x0F ; Set attribute (white text) 
+    add ebx, 2 ; Move to next character position 
+    ret
+
+
+
+
+
+
+
+; DEBUG ONLY SHT
+test_lba2chs:
+    ; Input: SI = LBA sector number
+    ; Output: CH = Cylinder, CL = Sector, DH = Head (Used for INT 0x13, AH=0x02)
+    mov si, 22
+    call lba2chs  ; Convert LBA to CHS
+
+    ; Debug print: Check if values are correct
+    mov dl, ch
+    call print_hex_dl2  ; Print Cylinder
+    mov dl, cl
+    call print_hex_dl2  ; Print Sector
+    mov dl, dh
+    call print_hex_dl2  ; Print Head
+
+    ret
+
+
+dbsdbg:
+    push eax
+    push ebx
+    mov ebx, 0xB8000
+
+    call print_hex_dl2
+    mov dl, dh
+    call print_hex_dl2
+
+    mov dl, cl
+    call print_hex_dl2
+    mov dl, ch
+    call print_hex_dl2
+
+    mov eax, ebx
+    pop ebx
+    mov dl, bl
+    mov dh, bh
+    mov ebx, eax
+    call print_hex_dl2
+    mov dl, dh
+    call print_hex_dl2
+
+    pop eax
+    
+    mov dl, al
+    call print_hex_dl2
+    mov dl, ah
+    call print_hex_dl2
+
+
+    cli
+    hlt
+; OK END OF DEBUG FNs
 
 
 
@@ -263,9 +367,10 @@ lba2chs:
 ;    Offset 0x08, Size 4, Exp: Lower 32 bits of starting sector
 ;    Offset 0x0C, Size 4, Exp: Upper 32 bits of starting sector (almost always 0)
 ;    Offset 0x10, Size 1, Exp: DRIVE NUMBER
+;    Offset 0x11, Size 1, Exp: reserved
 DiskRead16bRM:
     mov di, .dap            ; DI points to the destination
-    mov cx, 17              ; Number of bytes to copy
+    mov cx, 18              ; Number of bytes to copy
     rep movsb               ; Copy `CX` bytes from `[SI]` to `[DI]`
 
     mov ah, 0x41            ; Check if LBA is supported
@@ -275,20 +380,21 @@ DiskRead16bRM:
     jc .use_CHS             ; If carry flag is set, LBA is not supported
     jmp .use_LBA            ; If LBA is supported, jump to LBA routine
 
-.use_CHS:                       ; NOTE: I AM USING A LOCAL HERE BCUZ PERHAPS I SHOULD ADD LBA IN THE FUTURE?
-    mov si, [.dap + 2]
-    call lba2chs
+.use_CHS:
+    mov bx, [.dap + 6]      ; Segment (ES)
+    mov es, bx
+    mov bx, [.dap + 4]      ; Offset (BX)
 
-    mov bx, [.dap + 6]          ; read address
-    shl bx, 1
-    add bx, [.dap + 4]
+    mov ah, 0x02            ; INT 13h read
+    mov al, [.dap + 2]      ; Sector count (1 byte here, safe)
 
-    mov ah, 0x02                ; BIOS CHS disk read function
-    mov al, [.dap + 0x08]       ; Number of sectors to read
-    mov dl, [.dap + 0x10]       ; Disk number
-    
-    int 0x13                    ; BIOS disk
+    mov si, [.dap + 8]      ; Starting LBA (you pass lower 16 bits only?)
+    call lba2chs            ; You better fill CH, CL, DH inside
+
+    mov dl, [.dap + 0x10]   ; Custom disk # field — NOT standard, but ok
+    int 0x13                ; Fire BIOS read
     jnc .done
+
 
     mov si, badcode_error_string_1
     jmp .errcommon
@@ -310,12 +416,15 @@ DiskRead16bRM:
     jc .checkreset
     jmp .done             ; jump to loaded 
 .checkreset:
+    mov si, badcode_error_string_2
+
     dec cl
     test cl, cl
     jz .errcommon
     jmp .reset
     
 .errcommon:
+    call print_si
     stc
 
 .done:
@@ -326,14 +435,13 @@ align 16
     db 16                   ; size of DAP (16 bytes) EXCLUDING drive id
     db 0                    ; reserved (1 byte)
     dw SECTOR_COUNT_READOP  ; Operation size (like the NASM err when u move data between two addressses without saying word or byte, but in sectors and for reading disks)
-    dw 0xA000               ; offset (BX)
+    dw 0x8000               ; offset (BX)
     dw 0x0000               ; segment (ES)
     dd 16                   ; Lower 32 bits of starting sector
     dd 0                    ; Upper 32 bits of starting sector (almost always 0)
-    dd 0                    ; DRIVE NUMBER
+    dw 0                    ; DRIVE NUMBER
 
-dd 0 ; saefti
-
+SHIFT_FACTOR: dd 0
 
 msg_bootdone db 'Welcome to the ', 0
 db 'AMPBootManager', 0
@@ -350,8 +458,7 @@ bootdone:
     mov ah, 0x00               ; BIOS set video mode function
     mov al, 0x03               ; Mode 3 = 80x25 text mode
     int 0x10                   ; BIOS video interrupt
-    
-    mov dl, [BOOT_DRIVE]
+
     cmp dl, 0x80
     jb .s512
     cmp dl, 0xE0
@@ -365,16 +472,22 @@ bootdone:
     mov word  [rdap0+0x02], 1
     mov dword [rdap0+0x08], 16
     mov [rdap0+0x10], dl
+    mov byte [SHIFT_FACTOR], 0
     jmp .readop
 
 .s512:
     mov word  [rdap0+0x02], 4
     mov dword [rdap0+0x08], 64
     mov [rdap0+0x10], dl
+    mov byte [SHIFT_FACTOR], 2
     
 .readop:
     mov si, rdap0
+    mov ebx, 0xB8000
+    mov ecx, 0
+
     call DiskRead16bRM
+    jc .OffsetPrerun
 
     mov ebx, 0xB8000
     mov ecx, 0
@@ -431,16 +544,164 @@ bootdone:
     mov ecx, 0
     mov edx, 7
 .done:
-    mov al, [0xA000 + ecx]
+    jmp DiskParser
+.OffsetPrerun:
+    mov ebx, 0xB8110
+    mov ecx, 0
+    jmp .loop0
+
+DiskParser:
+    ; time to process the BS we printed
+    mov si, CORRECT_CD001
+    mov di, 0x8000
+    mov cx, 6
+    repe cmpsb   ; Black magic which translates to "Compare bytes" in 8086 speak
+    jz .Continue
+
+.NotEqual:
+    mov ecx, 0
+.NotEqual0:
+    mov al, [Matchnt + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0F
+    add ebx, 2
+    inc ecx
+    cmp byte [Matchnt + ecx], 0
+    jne .NotEqual0
+
+    mov ecx, 0
+    mov edx, 6
+.NotEqual1:
+    mov al, [0x8000 + ecx]
     mov [ebx], al
     mov byte [ebx + 1], 0x0F
     add ebx, 2
     inc ecx
     dec edx
     cmp edx, 0
-    jne .done
+    jne .NotEqual1
+    
+    jmp HALT_PM_B32   
 
+.Continue:
+    mov ecx, 0
+.Continue0:
+    mov al, [Matchs + ecx]
+    mov [ebx], al
+    mov byte [ebx + 1], 0x0F
+    add ebx, 2
+    inc ecx
+    cmp byte [Matchs + ecx], 0
+    jne .Continue0
+
+    mov dl, [BOOT_DRIVE]
+
+    cmp dl, 0x80
+    jb .t512
+    cmp dl, 0xE0
+    jb .t512
+    cmp dl, 0xF0
+    jb .t2048
+
+    jmp .t512               ; Other Device. Please fix in future
+
+.t2048:
+    mov eax, [0x80A6]
+    
+    add eax, 2047      ; add divisor - 1 to round up
+    shr eax, 11        ; divide by 2048
+    
+    mov [ROOT_PVD_SECTOR_COUNT], eax
+    mov [rdap0+0x02], ax
+
+    mov eax, [0x809E]
+    mov [rdap0+0x08], eax
+    jmp .treadop
+
+.t512:
+    mov eax, [0x80A6]
+    
+    add eax, 2047      ; add divisor - 1 to round up
+    shr eax, 11        ; divide by 2048
+
+    mov [ROOT_PVD_SECTOR_COUNT], eax
+    shl eax, 2
+    mov [rdap0+0x02], ax
+
+    mov eax, [0x809E]
+    shl eax, 2
+    mov [rdap0+0x08], eax    
+
+.treadop:
+    clc
+
+    mov [rdap0 + 0x10], dl
+
+    mov si, rdap0
+    call DiskRead16bRM
+    mov ecx, 0
+
+.parseloop:
+    mov ah, [0x8000 + ecx]
+    test ah, ah
+    jnz .valid
+
+    ; zero.... NEXT SECTOR (if available)
+    mov [TEMP_REG32_0], ecx
+    mov [TEMP_REG32_1], eax
+
+
+;    ; Basically we do `ECX//(2<<11)` to get mod
+;    shr ecx, 11
+;    shl ecx, 11
+;
+;    ; now we have what to sub by to get mod
+;    mov eax, ecx
+;    mov ecx, [TEMP_REG32_0]
+;
+;    sub ecx, eax
+;
+;    ; EDIT: :facepalm: i coulda just `and ecx, (2<<11)-1`
+    and ecx, (2<<11)-1
+    test ecx, ecx
+    jz DiskParser.NotEqual ; we are on the first gah damn byte of the secta so we musta F'ed up
+
+    mov ecx, [TEMP_REG32_0] ; restore counter
+    add ecx, 2047      ; add divisor - 1 to round up
+    shr ecx, 11        ; divide by 2048 (aka 2<<11). ECX now contains what sector it ***SHOULD*** jump to
+
+    mov ax, [ROOT_PVD_SECTOR_COUNT] ; store into AX the size of the root PVD in sectors
+    test cx, ax  ; see if we hit the end
+    je DiskParser.NotEqual ; Error 404: file not found
+
+.valid:
+    mov ax, [0x8020 + ecx] ; 0x8020 = 0x8000 + 32 (32 is offset for filename length)
+    mov [NAME_LEN], ax
     jmp HALT_PM_B32
+
+
+CORRECT_CD001:
+    db 0x01, "CD001"
+
+ROOT_PVD_SECTOR_COUNT:
+    dd 0
+    
+NAME_LEN:
+    dd 0
+
+TEMP_REG32_0:
+    dd 0
+TEMP_REG32_1:
+    dd 0
+TEMP_REG32_2:
+    dd 0
+TEMP_REG32_3:
+    dd 0
+
+Matchnt:
+    db " ~~ Bruh, signature not match wtf... It says, and I quote:", 0
+Matchs:
+    db " ~~ IT WURKZ!!!! WE GOT PVD BOYS LETS FKN GOOOO", 0
 
 
 times SECTOR_COUNT_ISO_PAD_BYTES - ($ - $$) db 0
