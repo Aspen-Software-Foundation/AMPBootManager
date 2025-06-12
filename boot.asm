@@ -675,8 +675,8 @@ DiskParser:
     je DiskParser.NotEqual ; Error 404: file not found
 
 .valid:
-    mov ax, [0x8020 + ecx] ; 0x8020 = 0x8000 + 32 (32 is offset for filename length)
-    mov [NAME_LEN], ax
+    mov ah, [0x8020 + ecx] ; 0x8020 = 0x8000 + 32 (32 is offset for filename length)
+    mov [NAME_LEN], ah
     jmp HALT_PM_B32
 
 
@@ -687,7 +687,7 @@ ROOT_PVD_SECTOR_COUNT:
     dd 0
     
 NAME_LEN:
-    dd 0
+    db 0
 
 TEMP_REG32_0:
     dd 0
