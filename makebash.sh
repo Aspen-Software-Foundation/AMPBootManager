@@ -1,20 +1,20 @@
 #!/bin/bash
 set -e
 
-mkdir -p bin
-mkdir -p iso
-
-nasm -f bin -o bin/boot.ase boot.asm
+nasm -f bin -o bin/boot.ase bl.asm
 cp bin/boot.ase bin/bootloader.ase
 cp bin/boot.ase bin/bootloader_floppy.ase
 
 truncate -s 1474560 bin/bootloader_floppy.ase
 truncate -s 327680  bin/bootloader.ase
 
+
+mkdir -p iso/boot
 cp bin/bootloader.ase iso/bootloader.ase
-xorriso -as mkisofs -iso-level 3 -rock -joliet -eltorito-boot bootloader.ase -no-emul-boot -boot-load-size 1\
+xorriso -as mkisofs -iso-level 3 -eltorito-boot bootloader.ase -no-emul-boot -boot-load-size 1\
  -isohybrid-gpt-basdat -o os.iso iso/
-# -eltorito-alt-boot -e EFI/BOOT/BOOTX64.EFI
+# -eltorito-alt-boot -e EFI/BOOT/BOOTX64.EFI -no-emul-boot
+cp os.iso og.iso
 
 dd if=os.iso of=gpt_primary.bin bs=512 skip=1 count=33
 sectors=$(($(stat -c%s os.iso)/512))
