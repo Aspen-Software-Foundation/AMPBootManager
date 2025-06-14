@@ -544,6 +544,7 @@ bootdone:
     mov ecx, 0
     mov edx, 7
 .done:
+    mov [TEMP_REG32_3], ebx
     jmp DiskParser
 .OffsetPrerun:
     mov ebx, 0xB8110
@@ -593,6 +594,7 @@ DiskParser:
     inc ecx
     cmp byte [Matchs + ecx], 0
     jne .Continue0
+    mov [TEMP_REG32_3], ebx
 
     mov dl, [BOOT_DRIVE]
 
@@ -634,7 +636,6 @@ DiskParser:
 
 .treadop:
     clc
-
     mov [rdap0 + 0x10], dl
 
     mov si, rdap0
@@ -649,6 +650,8 @@ DiskParser:
     ; zero.... NEXT SECTOR (if available)
     mov [TEMP_REG32_0], ecx
     mov [TEMP_REG32_1], eax
+
+    jmp DiskParser.NotEqual
 
 
 ;    ; Basically we do `ECX//(2<<11)` to get mod
@@ -675,8 +678,128 @@ DiskParser:
     je DiskParser.NotEqual ; Error 404: file not found
 
 .valid:
-    mov ah, [0x8020 + ecx] ; 0x8020 = 0x8000 + 32 (32 is offset for filename length)
+    mov [TEMP_REG32_0], ecx
+    mov ah, [ecx + 0x8020] ; 0x8020 = 0x8000 + 32 (32 is offset for filename length)
     mov [NAME_LEN], ah
+    
+    mov ah, [ecx + 0x8000] ; entry size is at sart of etnry
+    mov [ENTRY_LEN], ah
+
+    mov eax, ecx
+    add eax, 0x8021
+    mov di, ax
+    
+    mov eax, BOOTFILE
+    mov si, ax
+    
+    mov ax, [NAME_LEN]
+
+    mov ebx, BOOTFILE
+    mov si, bx
+
+    call strlen
+    
+;    push ecx
+;    push ebx
+;    mov dl, bl
+;    mov ebx, [TEMP_REG32_3]
+;    mov ecx, [TEMP_REG32_0]
+;    call print_hex_dl2
+;    mov dl, al
+;    call print_hex_dl2
+;    pop ebx
+;    pop ecx
+
+    cmp al, bl
+    jne .continee ; Naw its too short
+    ; hol up maybe this the right file?
+
+    mov eax, BOOTFILE
+    mov si, ax
+    
+    mov eax, ecx
+    add eax, 0x8021
+    mov di, ax
+
+    mov cx, [NAME_LEN]
+
+    repe cmpsb
+    jnz .continee
+    ; CHAT THIS THE ONE
+    ; Assuming `entry` is a memory location
+    ; Load entry_lba from entry[2:6] (4 bytes, little-endian)
+    
+    mov dl, [BOOT_DRIVE]
+
+    cmp dl, 0x80
+    jb .u512
+    cmp dl, 0xE0
+    jb .u512
+    cmp dl, 0xF0
+    jb .u2048
+
+    jmp .t512               ; Other Device. Please fix in future
+
+.u2048:
+    mov ecx, [TEMP_REG32_0]
+    mov eax, [0x800A + ecx]
+    
+    add eax, 2047      ; add divisor - 1 to round up
+    shr eax, 11        ; divide by 2048
+    mov [rdap0+0x02], ax
+
+    mov eax, [0x8002 + ecx]
+    mov [rdap0+0x08], eax
+    jmp .ureadop
+
+.u512:
+    mov ecx, [TEMP_REG32_0]
+    mov eax, [0x800A + ecx]
+    
+    add eax, 2047      ; add divisor - 1 to round up
+    shr eax, 11        ; divide by 2048
+    shl eax, 2         ; shr then shl to mask. might be faster to use an and operation but maybe later
+    mov [rdap0+0x02], ax
+
+    mov eax, [0x8002 + ecx]
+    shl eax, 2
+    mov [rdap0+0x08], eax
+
+.ureadop:
+    clc
+    mov [rdap0 + 0x10], dl
+
+    mov si, rdap0
+    call DiskRead16bRM
+
+    call clear_screen
+
+    mov ax, 0x8000
+    mov si, ax
+    call print_si
+    jmp HALT_PM_B32
+
+.continee:    
+    mov ecx, [TEMP_REG32_0]
+    mov dl, ch
+    call print_hex_dl2
+    mov dl, cl
+    call print_hex_dl2
+    
+    mov byte [ebx], ' '
+    add ebx, 2
+
+    mov [TEMP_REG32_3], ebx
+
+    mov eax, [ENTRY_LEN]
+    add ecx, eax
+
+    test eax, eax
+    jz .parseloop
+
+    jmp .valid
+
+
     jmp HALT_PM_B32
 
 
@@ -687,7 +810,13 @@ ROOT_PVD_SECTOR_COUNT:
     dd 0
     
 NAME_LEN:
-    db 0
+    dd 0
+
+ENTRY_LEN:
+    dd 0
+
+BOOTFILE:
+    dd "BOOT_TEST.TXT;1", 0
 
 TEMP_REG32_0:
     dd 0
@@ -701,7 +830,44 @@ TEMP_REG32_3:
 Matchnt:
     db " ~~ Bruh, signature not match wtf... It says, and I quote:", 0
 Matchs:
-    db " ~~ IT WURKZ!!!! WE GOT PVD BOYS LETS FKN GOOOO", 0
+    db " ~~ IT WURKZ!!!! WE GOT PVD BOYS LETS FKN GOOOU", 0
+
+
+; strlen: DS:SI = ptr to null-terminated string
+; returns AX = length
+
+strlen:
+    mov bx, 0
+.strl01:
+    cmp byte [si + bx], 0
+    je .strend 
+    inc bx
+    jmp .strl01
+.strend:
+    ret
+
+SWAP_BUFFER:
+    dd 0
+
+clear_screen:
+    push es
+    push di
+    push ax
+    push cx
+
+    mov ax, 0xB000
+    mov es, ax
+    mov di, 0x8000      ; Point DI to video memory
+    mov ax, 0x0720      ; 'Space' character (0x20) with attribute (0x07 → black on white)
+    mov cx, 2000        ; 80x25 screen = 2000 characters
+
+    rep stosw           ; Fill the screen with spaces (clears everything)
+    
+    pop cx
+    pop ax
+    pop di
+    pop es
+    ret
 
 
 times SECTOR_COUNT_ISO_PAD_BYTES - ($ - $$) db 0
