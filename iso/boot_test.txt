@@ -1,0 +1,25 @@
+
+SWAP_BUFFER:
+    dd 0
+
+clear_screen:
+    push es
+    push di
+    push ax
+    push cx
+
+    mov ax, 0xB000
+    mov es, ax
+    mov di, 0x8000
+    mov ax, 0x0720
+    mov cx, 2000
+
+    rep stosw
+    
+    pop cx
+    pop ax
+    pop di
+    pop es
+    ret
+
+times SECTOR_COUNT_ISO_PAD_BYTES - ($ - $$) db 0
