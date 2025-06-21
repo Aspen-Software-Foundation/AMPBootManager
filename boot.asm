@@ -353,6 +353,8 @@ lba2chs:
     pop ax
     ret
 
+ESPLACE:
+    dw 0
 
 ; Read Disk
 ; inputs:
@@ -379,10 +381,11 @@ DiskRead16bRM:
 
     jc .use_CHS             ; If carry flag is set, LBA is not supported
     jmp .use_LBA            ; If LBA is supported, jump to LBA routine
+    
+    mov bx, es
+    mov [ESPLACE], bx
 
 .use_CHS:
-    mov bx, [.dap + 6]      ; Segment (ES)
-    mov es, bx
     mov bx, [.dap + 4]      ; Offset (BX)
 
     mov ah, 0x02            ; INT 13h read
@@ -392,6 +395,9 @@ DiskRead16bRM:
     call lba2chs            ; You better fill CH, CL, DH inside
 
     mov dl, [.dap + 0x10]   ; Custom disk # field — NOT standard, but ok
+    
+    mov bx, [.dap + 6]      ; Segment (ES)
+    mov es, bx
     int 0x13                ; Fire BIOS read
     jnc .done
 
@@ -424,10 +430,16 @@ DiskRead16bRM:
     jmp .reset
     
 .errcommon:
+    mov bx, [ESPLACE]
+    mov es, bx
+
     call print_si
     stc
 
 .done:
+    mov bx, [ESPLACE]
+    mov es, bx
+
     ret
 
 align 16
@@ -767,6 +779,8 @@ DiskParser:
 
 .ureadop:
     clc
+    mov word [rdap0 + 4], 0xF000
+    mov word [rdap0 + 6], 0x0000
     mov [rdap0 + 0x10], dl
 
     mov si, rdap0
@@ -774,9 +788,14 @@ DiskParser:
 
     call clear_screen
 
-    mov ax, 0x8000
+    mov ax, 0xF000
     mov si, ax
-    call print_si
+    mov ax, 0x0000
+    mov es, ax
+
+    mov dl, [BOOT_DRIVE]
+    mov ebx, 0xB8000
+    jmp si
     jmp HALT_PM_B32
 
 .continee:    
@@ -816,7 +835,7 @@ ENTRY_LEN:
     dd 0
 
 BOOTFILE:
-    dd "BOOT_TEST.TXT;1", 0
+    dd "KERNEL.ASE;1", 0
 
 TEMP_REG32_0:
     dd 0
