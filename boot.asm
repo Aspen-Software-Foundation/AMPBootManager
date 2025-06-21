@@ -398,6 +398,7 @@ DiskRead16bRM:
     
     mov bx, [.dap + 6]      ; Segment (ES)
     mov es, bx
+    mov bx, [.dap + 4]      ; THIS MADE ME EAT GRASS
     int 0x13                ; Fire BIOS read
     jnc .done
 
