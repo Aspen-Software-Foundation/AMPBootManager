@@ -1,7 +1,19 @@
 #!/bin/bash
 set -e
 
-nasm -f bin -o bin/boot.ase bl.asm
+# make
+mkdir -p bin
+nasm -f bin -o bin/boot.ase boot.asm
+nasm -f elf32 -o bin/stageloading.o entry16.asm
+nasm -f elf32 -o bin/kernel_entry.o entry32.asm
+gcc -m32 -o bin/kmain.o -c kmain.c -nostdlib -ffreestanding -nostartfiles -fno-pie -fno-pic -Werror -Wall  
+# -Wall basically places a wall in ur terminal. -Werror brings Wario and Waluigi into the error detection process
+# i use GCC cuz maybe some ppl dont have gcc-elf-iX86 (HINT: Me, i don't have time)
+
+ld -m elf_i386 -T linker.ld bin/stageloading.o bin/kernel_entry.o bin/kmain.o -o bin/kernel.ase
+
+
+# ISO ination
 cp bin/boot.ase bin/bootloader.ase
 cp bin/boot.ase bin/bootloader_floppy.ase
 
@@ -11,7 +23,8 @@ truncate -s 327680  bin/bootloader.ase
 
 mkdir -p iso/boot
 cp bin/bootloader.ase iso/bootloader.ase
-xorriso -as mkisofs -iso-level 3 -eltorito-boot bootloader.ase -no-emul-boot -boot-load-size 1\
+cp bin/kernel.ase    iso/kernel.ase
+xorriso -as mkisofs -iso-level 3 -eltorito-boot bootloader.ase -no-emul-boot -boot-load-size 4\
  -isohybrid-gpt-basdat -o os.iso iso/
 # -eltorito-alt-boot -e EFI/BOOT/BOOTX64.EFI -no-emul-boot
 cp os.iso og.iso
